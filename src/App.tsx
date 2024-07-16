@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import useGeolocation from "react-hook-geolocation";
-import { itemMap, tagMatchers } from "./item-map";
+import { Drop, itemMap, tagMatchers } from "./item-map";
 
 async function getLocalData([latitude, longitude]: Coordinate) {
   const result = await fetch("https://overpass-api.de/api/interpreter", {
@@ -54,19 +54,6 @@ function mapLatLonToXY(
   const x = width / 2 - (lat - lat0) * scale;
   const y = (lon - lon0) * scale + height / 2;
   return [y, x];
-}
-
-function mapXYToLatLon(
-  position: Coordinate,
-  xy: Coordinate,
-  viewport: Coordinate
-) {
-  const [x, y] = xy;
-  const [lat0, lon0] = position;
-  const [width, height] = viewport;
-  const lat = x / scale + lat0 - width / 2;
-  const lon = y / scale + lon0 - height / 2;
-  return [lat, lon];
 }
 
 function inside(point: Coordinate, vs: Coordinate[]) {
@@ -143,7 +130,7 @@ function Map({
       const drop = dropMatches?.drops[0];
       return { item, drop };
     })
-    .filter(Boolean);
+    .filter(Boolean) as { item: OSMNode; drop: Drop }[] | undefined;
 
   const noMatches = features?.filter((item) => {
     return !matches?.includes(item);
@@ -177,7 +164,7 @@ function Map({
           position: [
             centreTilePosition[0] + (x - numTiles[0] / 2) * tileDegrees,
             centreTilePosition[1] + (y - numTiles[1] / 2) * tileDegrees,
-          ],
+          ] as Coordinate,
           type: "grass",
           color: "green",
           ways: [] as OSMWay[],
@@ -187,8 +174,8 @@ function Map({
   // finally, we determine what to render in each tile
   // to do this, we need to iterate over each way and determine if the midpoint of the tile lies within the polygon.
   // we will use the ray casting algorithm for this.
-  tilePositions.forEach((row, x) => {
-    row.forEach((tile, y) => {
+  tilePositions.forEach((row) => {
+    row.forEach((tile) => {
       // for each way
       features?.forEach((way) => {
         if (way.type !== "way") {
@@ -305,7 +292,7 @@ function Map({
         {
           // render each tile
           tilePositions.map((row, x) =>
-            row.map(({ position, type, color }, y) => {
+            row.map(({ position, color }, y) => {
               const xy = mapLatLonToXY(
                 [geolocation.latitude, geolocation.longitude],
                 position,
@@ -398,13 +385,16 @@ function Map({
               <div>{itemMap[drop?.item] ? itemMap[drop?.item] : ""}</div>
               <div css={{ fontSize: 8 }}>
                 {Object.entries(item?.tags || {}).map(
-                  ([key, value]) => `${value}; `
+                  ([, value]) => `${value}; `
                 )}
               </div>
             </div>
           );
         })}
         {noMatches?.map((item) => {
+          if (item.type !== "node") {
+            return null;
+          }
           const position = mapLatLonToXY(
             [geolocation.latitude, geolocation.longitude],
             [item.lat, item.lon],

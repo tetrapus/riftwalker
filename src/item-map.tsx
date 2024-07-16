@@ -1,4 +1,4 @@
-interface Drop {
+export interface Drop {
   item: string;
 }
 
@@ -1057,9 +1057,12 @@ export const itemMap: { [key: string]: string } = {
   Leaf: "🍃",
 };
 
+/*
 const tileMap: { matchers: { [key: string]: string }[]; color: string }[] = [
   {
     matchers: [{ landuse: "railway" }],
     color: "blue",
   },
 ];
+
+*/
