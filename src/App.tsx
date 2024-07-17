@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useGeolocation from "react-hook-geolocation";
-import { Drop, itemMap, tagMatchers } from "./item-map";
+import { colorMap, Drop, itemMap, tagMatchers } from "./item-map";
 
 async function getLocalData({ lat, lon }: LatLon) {
   const result = await fetch("https://overpass-api.de/api/interpreter", {
@@ -100,6 +100,47 @@ function App() {
   );
 }
 
+function MapBackground({
+  tilePositions,
+  geolocation,
+}: {
+  tilePositions: {
+    position: LatLon;
+    type: string;
+    color: string;
+    ways: OSMWay[];
+  }[][];
+  geolocation: LatLon;
+}) {
+  return (
+    // render each tile
+    tilePositions.map((row, x) =>
+      row.map(({ position, color }, y) => {
+        const xy = mapLatLonToXY(geolocation, position, {
+          x: window.innerWidth,
+          y: window.innerHeight,
+        });
+        return (
+          <div
+            key={`${x}-${y}`}
+            css={{
+              position: "fixed",
+              width: tileSize,
+              height: tileSize,
+              border: "1px solid white",
+            }}
+            style={{
+              top: xy.y,
+              left: xy.x,
+              background: color,
+            }}
+          ></div>
+        );
+      })
+    )
+  );
+}
+
 function Map({ geolocation }: { geolocation: LatLon }) {
   const offset = [window.innerWidth / 2, window.innerHeight / 2];
 
@@ -109,40 +150,6 @@ function Map({ geolocation }: { geolocation: LatLon }) {
       setFeatures(data.elements);
     });
   }, []);
-
-  // filter out all matches from the item map
-  const matches = features?.filter((item) => {
-    if (!item.tags) {
-      return false;
-    }
-    return tagMatchers.some((matcher) =>
-      matcher.matchers.some((pattern) =>
-        Object.entries(pattern).every(([key, value]) => item.tags[key] == value)
-      )
-    );
-  });
-
-  const items = features
-    ?.filter((item) => item.type === "node")
-    ?.map((item) => {
-      if (!item.tags) {
-        return undefined;
-      }
-      const dropMatches = tagMatchers.find((matcher) =>
-        matcher.matchers.find((pattern) =>
-          Object.entries(pattern).every(
-            ([key, value]) => item.tags[key] == value
-          )
-        )
-      );
-      const drop = dropMatches?.drops[0];
-      return { item, drop };
-    })
-    .filter(Boolean) as { item: OSMNode; drop: Drop }[] | undefined;
-
-  const noMatches = features?.filter((item) => {
-    return !matches?.includes(item);
-  });
 
   // to keep things simple, we set tiles to be bound by the nearest 0.0001 degree
   // first, we calculate how many tiles to render in the viewport.
@@ -160,157 +167,138 @@ function Map({ geolocation }: { geolocation: LatLon }) {
     lon: Math.round(geolocation.lon / tileDegrees) * tileDegrees,
   };
 
-  // now, we get the value for each tile we are rendering
-  const tilePositions = Array(numTiles.y)
-    .fill(null)
-    .map((_, y) =>
-      Array(numTiles.x)
-        .fill(null)
-        .map((_, x) => ({
-          position: {
-            lat: centreTilePosition.lat + (numTiles.y / 2 - y) * tileDegrees,
-            lon: centreTilePosition.lon + (numTiles.x / 2 - x) * tileDegrees,
-          } as LatLon,
-          type: "grass",
-          color: "green",
-          ways: [] as OSMWay[],
-        }))
-    );
+  const { items, noMatches, tilePositions } = useMemo(() => {
+    // filter out all matches from the item map
+    const matches = features?.filter((item) => {
+      if (!item.tags) {
+        return false;
+      }
+      return tagMatchers.some((matcher) =>
+        matcher.matchers.some((pattern) =>
+          Object.entries(pattern).every(
+            ([key, value]) => item.tags[key] == value
+          )
+        )
+      );
+    });
 
-  // finally, we determine what to render in each tile
-  // to do this, we need to iterate over each way and determine if the midpoint of the tile lies within the polygon.
-  // we will use the ray casting algorithm for this.
-  tilePositions.forEach((row) => {
-    row.forEach((tile) => {
-      // for each way
-      features?.forEach((way) => {
-        if (way.type !== "way") {
-          return;
+    const items = features
+      ?.filter((item) => item.type === "node")
+      ?.map((item) => {
+        if (!item.tags) {
+          return undefined;
         }
-        // first, check if the tile is within the bounding box
-        if (
-          way.bounds.minlat > tile.position.lat ||
-          way.bounds.maxlat < tile.position.lat ||
-          way.bounds.minlon > tile.position.lon ||
-          way.bounds.maxlon < tile.position.lon
-        ) {
-          return;
-        }
-        // we also only care about closed ways
-        if (
-          way.nodes[0] !== way.nodes[way.nodes.length - 1] ||
-          way.nodes.length < 3
-        ) {
-          return;
-        }
-
-        // now, we need to check if the tile is within the polygon
-        const path = way.geometry.map((latlon) =>
-          mapLatLonToXY(geolocation, latlon, {
-            x: window.innerWidth,
-            y: window.innerHeight,
-          })
+        const dropMatches = tagMatchers.find((matcher) =>
+          matcher.matchers.find((pattern) =>
+            Object.entries(pattern).every(
+              ([key, value]) => item.tags[key] == value
+            )
+          )
         );
+        const drop = dropMatches?.drops[0];
+        return { item, drop };
+      })
+      .filter(Boolean) as { item: OSMNode; drop: Drop }[] | undefined;
 
-        if (
-          inside(
-            mapLatLonToXY(geolocation, tile.position, {
+    const noMatches = features?.filter((item) => {
+      return !matches?.includes(item);
+    });
+
+    // now, we get the value for each tile we are rendering
+    const tilePositions = Array(numTiles.y)
+      .fill(null)
+      .map((_, y) =>
+        Array(numTiles.x)
+          .fill(null)
+          .map((_, x) => ({
+            position: {
+              lat: centreTilePosition.lat + (numTiles.y / 2 - y) * tileDegrees,
+              lon: centreTilePosition.lon + (numTiles.x / 2 - x) * tileDegrees,
+            } as LatLon,
+            type: "grass",
+            color: "green",
+            ways: [] as OSMWay[],
+          }))
+      );
+
+    // finally, we determine what to render in each tile
+    // to do this, we need to iterate over each way and determine if the midpoint of the tile lies within the polygon.
+    // we will use the ray casting algorithm for this.
+    tilePositions.forEach((row) => {
+      row.forEach((tile) => {
+        // for each way
+        features?.forEach((way) => {
+          if (way.type !== "way") {
+            return;
+          }
+          // first, check if the tile is within the bounding box
+          if (
+            way.bounds.minlat > tile.position.lat ||
+            way.bounds.maxlat < tile.position.lat ||
+            way.bounds.minlon > tile.position.lon ||
+            way.bounds.maxlon < tile.position.lon
+          ) {
+            return;
+          }
+          // we also only care about closed ways
+          if (
+            way.nodes[0] !== way.nodes[way.nodes.length - 1] ||
+            way.nodes.length < 3
+          ) {
+            return;
+          }
+
+          // now, we need to check if the tile is within the polygon
+          const path = way.geometry.map((latlon) =>
+            mapLatLonToXY(geolocation, latlon, {
               x: window.innerWidth,
               y: window.innerHeight,
-            }),
-            path
+            })
+          );
+
+          if (
+            inside(
+              mapLatLonToXY(geolocation, tile.position, {
+                x: window.innerWidth,
+                y: window.innerHeight,
+              }),
+              path
+            )
+          ) {
+            tile.ways.push(way);
+          }
+        });
+      });
+    });
+
+    tilePositions.forEach((row) => {
+      row.forEach((tile) => {
+        const color = colorMap.find((matcher) =>
+          matcher.matchers.some((pattern) =>
+            Object.entries(pattern).every(([key, value]) =>
+              tile.ways.some((way) =>
+                way.tags ? way.tags[key] == value : false
+              )
+            )
           )
-        ) {
-          tile.ways.push(way);
+        )?.color;
+        if (color) {
+          tile.color = color;
         }
       });
     });
-  });
 
-  // now we assign some colors
-  const colorMap = [
-    {
-      matchers: [{ landuse: "residential" }],
-      color: "red",
-    },
-    // surface: concrete => grey
-    {
-      matchers: [{ surface: "concrete" }],
-      color: "grey",
-    },
-    // amenity: college -> orange
-    {
-      matchers: [{ amenity: "college" }],
-      color: "orange",
-    },
-    // landuse: railway => blue
-    {
-      matchers: [{ landuse: "railway" }, { railway: "station" }],
-      color: "blue",
-    },
-    // leisure: park -> black
-    {
-      matchers: [{ leisure: "park" }],
-      color: "black",
-    },
-    // tourism: gallery -> purple
-    {
-      matchers: [{ tourism: "gallery" }],
-      color: "purple",
-    },
-    // landuse: commercial => yellow
-    {
-      matchers: [{ landuse: "commercial" }],
-      color: "yellow",
-    },
-  ];
-
-  tilePositions.forEach((row) => {
-    row.forEach((tile) => {
-      const color = colorMap.find((matcher) =>
-        matcher.matchers.some((pattern) =>
-          Object.entries(pattern).every(([key, value]) =>
-            tile.ways.some((way) => (way.tags ? way.tags[key] == value : false))
-          )
-        )
-      )?.color;
-      if (color) {
-        tile.color = color;
-      }
-    });
-  });
+    return { items, noMatches, tilePositions };
+  }, [features]);
 
   return (
     <div css={{ color: "white", fontSize: 64 }}>
       <div>
         {/* render the map */}
-        {
-          // render each tile
-          tilePositions.map((row, x) =>
-            row.map(({ position, color }, y) => {
-              const xy = mapLatLonToXY(geolocation, position, {
-                x: window.innerWidth,
-                y: window.innerHeight,
-              });
-              return (
-                <div
-                  key={`${x}-${y}`}
-                  css={{
-                    position: "fixed",
-                    width: tileSize,
-                    height: tileSize,
-                    border: "1px solid white",
-                  }}
-                  style={{
-                    top: xy.y,
-                    left: xy.x,
-                    background: color,
-                  }}
-                ></div>
-              );
-            })
-          )
-        }
+        <MapBackground
+          tilePositions={tilePositions}
+          geolocation={geolocation}
+        />
         <svg
           css={{
             width: "100vw",

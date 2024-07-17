@@ -1066,3 +1066,40 @@ const tileMap: { matchers: { [key: string]: string }[]; color: string }[] = [
 ];
 
 */
+// now we assign some colors
+export const colorMap = [
+  {
+    matchers: [{ landuse: "residential" }],
+    color: "red",
+  },
+  // surface: concrete => grey
+  {
+    matchers: [{ surface: "concrete" }],
+    color: "grey",
+  },
+  // amenity: college -> orange
+  {
+    matchers: [{ amenity: "college" }],
+    color: "orange",
+  },
+  // landuse: railway => blue
+  {
+    matchers: [{ landuse: "railway" }, { railway: "station" }],
+    color: "blue",
+  },
+  // leisure: park -> black
+  {
+    matchers: [{ leisure: "park" }],
+    color: "black",
+  },
+  // tourism: gallery -> purple
+  {
+    matchers: [{ tourism: "gallery" }],
+    color: "purple",
+  },
+  // landuse: commercial => yellow
+  {
+    matchers: [{ landuse: "commercial" }],
+    color: "yellow",
+  },
+];
