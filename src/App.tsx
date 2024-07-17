@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import useGeolocation from "react-hook-geolocation";
 import { Drop, itemMap, tagMatchers } from "./item-map";
 
-async function getLocalData([latitude, longitude]: Coordinate) {
+async function getLocalData({ lat, lon }: LatLon) {
   const result = await fetch("https://overpass-api.de/api/interpreter", {
-    body: `data=%5Bout%3Ajson%5D%3B%0A(%0A++node(around%3A500%2C${latitude}%2C${longitude})(if%3A+count_tags()+%3E+0)%3B%0A++way(around%3A500%2C${latitude}%2C${longitude})%3B%0A)%3B%0Aout+geom%3B`,
+    body: `data=%5Bout%3Ajson%5D%3B%0A(%0A++node(around%3A500%2C${lat}%2C${lon})(if%3A+count_tags()+%3E+0)%3B%0A++way(around%3A500%2C${lat}%2C${lon})%3B%0A)%3B%0Aout+geom%3B`,
     method: "POST",
   });
   return result.json();
@@ -37,38 +37,46 @@ interface OSMWay {
 
 type OSMElement = OSMNode | OSMWay;
 
-type Coordinate = [number, number];
+interface LatLon {
+  lat: number;
+  lon: number;
+}
+
+interface Coordinate {
+  x: number;
+  y: number;
+}
 
 const tileSize = 25;
 const tileDegrees = 0.00005;
 const scale = tileSize / tileDegrees;
 
 function mapLatLonToXY(
-  position: Coordinate,
-  latlon: Coordinate,
+  position: LatLon,
+  latlon: LatLon,
   viewport: Coordinate
 ): Coordinate {
-  const [lat, lon] = latlon;
-  const [lat0, lon0] = position;
-  const [width, height] = viewport;
-  const x = width / 2 - (lat - lat0) * scale;
-  const y = (lon - lon0) * scale + height / 2;
-  return [y, x];
+  const { lat, lon } = latlon;
+  const { lat: lat0, lon: lon0 } = position;
+  const { x: width, y: height } = viewport;
+  const y = height / 2 - (lat - lat0) * scale;
+  const x = (lon - lon0) * scale + width / 2;
+  return { x, y };
 }
 
 function inside(point: Coordinate, vs: Coordinate[]) {
   // ray-casting algorithm based on
   // https://wrf.ecse.rpi.edu/Research/Short_Notes/pnpoly.html
 
-  var x = point[0],
-    y = point[1];
+  var x = point.x,
+    y = point.y;
 
   var inside = false;
   for (var i = 0, j = vs.length - 1; i < vs.length; j = i++) {
-    var xi = vs[i][0],
-      yi = vs[i][1];
-    var xj = vs[j][0],
-      yj = vs[j][1];
+    var xi = vs[i].x,
+      yi = vs[i].y;
+    var xj = vs[j].x,
+      yj = vs[j].y;
 
     var intersect =
       yi > y != yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
@@ -85,19 +93,19 @@ function App() {
     return <div>Loading...</div>;
   }
 
-  return <Map geolocation={geolocation} />;
+  return (
+    <Map
+      geolocation={{ lat: geolocation.latitude, lon: geolocation.longitude }}
+    />
+  );
 }
 
-function Map({
-  geolocation,
-}: {
-  geolocation: { latitude: number; longitude: number };
-}) {
+function Map({ geolocation }: { geolocation: LatLon }) {
   const offset = [window.innerWidth / 2, window.innerHeight / 2];
 
   const [features, setFeatures] = useState<OSMElement[]>();
   useEffect(() => {
-    getLocalData([geolocation.latitude, geolocation.longitude]).then((data) => {
+    getLocalData(geolocation).then((data) => {
       setFeatures(data.elements);
     });
   }, []);
@@ -136,35 +144,33 @@ function Map({
     return !matches?.includes(item);
   });
 
-  console.log(items);
-
   // to keep things simple, we set tiles to be bound by the nearest 0.0001 degree
   // first, we calculate how many tiles to render in the viewport.
   // to cover unseen area, we multiply by 2.
-  const numTiles = [
-    Math.ceil(window.innerWidth / tileSize) * 2,
-    Math.ceil(window.innerHeight / tileSize) * 2,
-  ];
+  const numTiles = {
+    x: Math.ceil(window.innerWidth / tileSize) * 2,
+    y: Math.ceil(window.innerHeight / tileSize) * 2,
+  };
 
   // now, we anchor everything to the nearest tile centre in the viewport.
   // tile centres are at `tileSize` degree intervals, from the origin.
   // first, we need to find the nearest tile centre to our current position.
-  const centreTilePosition = [
-    Math.round(geolocation.latitude / tileDegrees) * tileDegrees,
-    Math.round(geolocation.longitude / tileDegrees) * tileDegrees,
-  ];
+  const centreTilePosition = {
+    lat: Math.round(geolocation.lat / tileDegrees) * tileDegrees,
+    lon: Math.round(geolocation.lon / tileDegrees) * tileDegrees,
+  };
 
   // now, we get the value for each tile we are rendering
-  const tilePositions = Array(numTiles[0])
+  const tilePositions = Array(numTiles.y)
     .fill(null)
-    .map((_, x) =>
-      Array(numTiles[1])
+    .map((_, y) =>
+      Array(numTiles.x)
         .fill(null)
-        .map((_, y) => ({
-          position: [
-            centreTilePosition[0] + (x - numTiles[0] / 2) * tileDegrees,
-            centreTilePosition[1] + (y - numTiles[1] / 2) * tileDegrees,
-          ] as Coordinate,
+        .map((_, x) => ({
+          position: {
+            lat: centreTilePosition.lat + (numTiles.y / 2 - y) * tileDegrees,
+            lon: centreTilePosition.lon + (numTiles.x / 2 - x) * tileDegrees,
+          } as LatLon,
           type: "grass",
           color: "green",
           ways: [] as OSMWay[],
@@ -183,10 +189,10 @@ function Map({
         }
         // first, check if the tile is within the bounding box
         if (
-          way.bounds.minlat > tile.position[0] ||
-          way.bounds.maxlat < tile.position[0] ||
-          way.bounds.minlon > tile.position[1] ||
-          way.bounds.maxlon < tile.position[1]
+          way.bounds.minlat > tile.position.lat ||
+          way.bounds.maxlat < tile.position.lat ||
+          way.bounds.minlon > tile.position.lon ||
+          way.bounds.maxlon < tile.position.lon
         ) {
           return;
         }
@@ -199,21 +205,19 @@ function Map({
         }
 
         // now, we need to check if the tile is within the polygon
-        const path = way.geometry.map(({ lat, lon }) =>
-          mapLatLonToXY(
-            [geolocation.latitude, geolocation.longitude],
-            [lat, lon],
-            [window.innerWidth, window.innerHeight]
-          )
+        const path = way.geometry.map((latlon) =>
+          mapLatLonToXY(geolocation, latlon, {
+            x: window.innerWidth,
+            y: window.innerHeight,
+          })
         );
 
         if (
           inside(
-            mapLatLonToXY(
-              [geolocation.latitude, geolocation.longitude],
-              tile.position,
-              [window.innerWidth, window.innerHeight]
-            ),
+            mapLatLonToXY(geolocation, tile.position, {
+              x: window.innerWidth,
+              y: window.innerHeight,
+            }),
             path
           )
         ) {
@@ -276,15 +280,6 @@ function Map({
     });
   });
 
-  // log tiles with ways
-  console.log(
-    tilePositions.map((row) =>
-      row
-        .filter((tile) => tile.ways.length > 0)
-        .map((tile) => tile.ways.map((way) => way.tags))
-    )
-  );
-
   return (
     <div css={{ color: "white", fontSize: 64 }}>
       <div>
@@ -293,22 +288,23 @@ function Map({
           // render each tile
           tilePositions.map((row, x) =>
             row.map(({ position, color }, y) => {
-              const xy = mapLatLonToXY(
-                [geolocation.latitude, geolocation.longitude],
-                position,
-                [window.innerWidth, window.innerHeight]
-              );
+              const xy = mapLatLonToXY(geolocation, position, {
+                x: window.innerWidth,
+                y: window.innerHeight,
+              });
               return (
                 <div
                   key={`${x}-${y}`}
-                  style={{
+                  css={{
                     position: "fixed",
-                    top: xy[1],
-                    left: xy[0],
                     width: tileSize,
                     height: tileSize,
-                    background: color,
                     border: "1px solid white",
+                  }}
+                  style={{
+                    top: xy.y,
+                    left: xy.x,
+                    background: color,
                   }}
                 ></div>
               );
@@ -333,16 +329,15 @@ function Map({
               return null;
             }
             // ignore everything not in viewport at all
-            const path = feature.geometry.map(({ lat, lon }) =>
-              mapLatLonToXY(
-                [geolocation.latitude, geolocation.longitude],
-                [lat, lon],
-                [window.innerWidth, window.innerHeight]
-              )
+            const path = feature.geometry.map((latlon) =>
+              mapLatLonToXY(geolocation, latlon, {
+                x: window.innerWidth,
+                y: window.innerHeight,
+              })
             );
             if (
               path.every(
-                ([x, y]) =>
+                ({ x, y }) =>
                   x < 0 ||
                   y < 0 ||
                   x > window.innerWidth ||
@@ -354,7 +349,7 @@ function Map({
             return (
               <path
                 key={feature.id}
-                d={`M ${path.map(([x, y]) => `${x} ${y}`).join(" L ")} Z`}
+                d={`M ${path.map(({ x, y }) => `${x} ${y}`).join(" L ")} Z`}
                 fill="none"
                 stroke="white"
                 data-testid={JSON.stringify(feature)}
@@ -363,19 +358,18 @@ function Map({
           })}
         </svg>
         {items?.map(({ item, drop }) => {
-          const position = mapLatLonToXY(
-            [geolocation.latitude, geolocation.longitude],
-            [item.lat, item.lon],
-            [window.innerWidth, window.innerHeight]
-          );
+          const position = mapLatLonToXY(geolocation, item, {
+            x: window.innerWidth,
+            y: window.innerHeight,
+          });
           return (
             <div
               key={item.id}
               css={{}}
               style={{
                 position: "fixed",
-                top: position[1],
-                left: position[0],
+                top: position.y,
+                left: position.x,
                 width: "10px",
                 height: "10px",
                 transform: "translate(-50%, -50%)",
@@ -395,19 +389,18 @@ function Map({
           if (item.type !== "node") {
             return null;
           }
-          const position = mapLatLonToXY(
-            [geolocation.latitude, geolocation.longitude],
-            [item.lat, item.lon],
-            [window.innerWidth, window.innerHeight]
-          );
+          const position = mapLatLonToXY(geolocation, item, {
+            x: window.innerWidth,
+            y: window.innerHeight,
+          });
           return (
             <div
               key={item.id}
               css={{}}
               style={{
                 position: "fixed",
-                top: position[1],
-                left: position[0],
+                top: position.y,
+                left: position.x,
                 width: "10px",
                 height: "10px",
                 background: "red",
@@ -445,8 +438,7 @@ function Map({
           fontSize: 12,
         }}
       >
-        {geolocation.latitude} {geolocation.longitude}{" "}
-        {JSON.stringify(geolocation)}
+        {geolocation.lat} {geolocation.lon} {JSON.stringify(geolocation)}
       </div>
     </div>
   );
