@@ -141,6 +141,12 @@ function MapBackground({
   );
 }
 
+interface InventoryItem {
+  item: string;
+  from: OSMElement;
+  foundTime: Date;
+}
+
 function Map({ geolocation }: { geolocation: LatLon }) {
   const offset = [window.innerWidth / 2, window.innerHeight / 2];
 
@@ -150,6 +156,8 @@ function Map({ geolocation }: { geolocation: LatLon }) {
       setFeatures(data.elements);
     });
   }, []);
+
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
 
   // to keep things simple, we set tiles to be bound by the nearest 0.0001 degree
   // first, we calculate how many tiles to render in the viewport.
@@ -292,7 +300,146 @@ function Map({ geolocation }: { geolocation: LatLon }) {
   }, [features]);
 
   return (
-    <div css={{ color: "white", fontSize: 64 }}>
+    <div
+      css={{ color: "white", fontSize: 64 }}
+      onClick={(e) => {
+        const position = {
+          lat: geolocation.lat + (e.clientY - window.innerHeight / 2) / scale,
+          lon: geolocation.lon + (e.clientX - window.innerWidth / 2) / scale,
+        };
+        console.log({ position });
+
+        // get all elements within 10 tiles
+        const dropProbability: {
+          elem: OSMElement;
+          drop: Drop;
+          probability: number;
+        }[] = [];
+        // first, we need to split ways and nodes.
+        const ways: OSMWay[] = [];
+        const nodes: OSMNode[] = [];
+
+        features?.forEach((elem) => {
+          if (elem.type === "way") {
+            ways.push(elem);
+          } else if (elem.type === "node") {
+            nodes.push(elem);
+          }
+        });
+
+        // for ways, we first do a check to see if we clicked inside the way
+        ways?.forEach((way) => {
+          const path = way.geometry.map((latlon) =>
+            mapLatLonToXY(geolocation, latlon, {
+              x: window.innerWidth,
+              y: window.innerHeight,
+            })
+          );
+          if (inside({ x: e.clientX, y: e.clientY }, path)) {
+            // if we are inside, we add the way to the drop probability
+            const dropMatches = tagMatchers.find((matcher) =>
+              matcher.matchers.find((pattern) =>
+                Object.entries(pattern).every(
+                  ([key, value]) => way.tags[key] == value
+                )
+              )
+            );
+            dropMatches?.drops.forEach((drop) => {
+              dropProbability.push({
+                elem: way,
+                drop,
+                probability:
+                  (10 * tileDegrees) ** 2 / dropMatches?.drops.length,
+              });
+            });
+          } else {
+            // otherwise, we can be a bit lazy by using the bounding box to approximate a probability.
+            const distance =
+              Math.min(
+                Math.abs(way.bounds.minlat - position.lat),
+                Math.abs(way.bounds.maxlat - position.lat)
+              ) **
+                2 +
+              Math.min(
+                Math.abs(way.bounds.minlon - position.lon),
+                Math.abs(way.bounds.maxlon - position.lon)
+              ) **
+                2;
+            // if the distance is less than 10 tiles, we add it to the drop probability
+            if (distance < (10 * tileDegrees) ** 2) {
+              const dropMatches = tagMatchers.find((matcher) =>
+                matcher.matchers.find((pattern) =>
+                  Object.entries(pattern).every(
+                    ([key, value]) => way.tags[key] == value
+                  )
+                )
+              );
+              dropMatches?.drops.forEach((drop) => {
+                dropProbability.push({
+                  elem: way,
+                  drop,
+                  probability:
+                    ((10 * tileDegrees) ** 2 - distance) /
+                    dropMatches?.drops.length,
+                });
+              });
+            }
+          }
+        });
+
+        nodes?.forEach((elem) => {
+          const distance =
+            Math.abs(elem.lat - position.lat) ** 2 +
+            Math.abs(elem.lon - position.lon) ** 2;
+          if (distance < (10 * tileDegrees) ** 2) {
+            const dropMatches = tagMatchers.find((matcher) =>
+              matcher.matchers.find((pattern) =>
+                Object.entries(pattern).every(
+                  ([key, value]) => elem.tags[key] == value
+                )
+              )
+            );
+            dropMatches?.drops.forEach((drop) => {
+              dropProbability.push({
+                elem,
+                drop,
+                probability: (10 * tileDegrees) ** 2 - distance,
+              });
+            });
+          }
+        });
+
+        console.log(dropProbability);
+
+        // now, we need to determine the drop
+        const totalProbability = dropProbability.reduce(
+          (acc, { probability }) => acc + probability,
+          0
+        );
+
+        const random = Math.random() * totalProbability;
+        let current = 0;
+        let drop: { item: string; from: OSMElement } | undefined;
+        for (const { elem, probability, drop: d } of dropProbability) {
+          current += probability;
+          if (random < current) {
+            drop = { item: d.item, from: elem };
+            break;
+          }
+        }
+
+        if (drop) {
+          setInventory([
+            ...inventory,
+            {
+              item: drop.item,
+              from: drop.from,
+              foundTime: new Date(),
+            },
+          ]);
+        }
+      }}
+    >
       <div>
         {/* render the map */}
         <MapBackground
@@ -427,6 +574,7 @@ function Map({ geolocation }: { geolocation: LatLon }) {
         }}
       >
         {geolocation.lat} {geolocation.lon} {JSON.stringify(geolocation)}
+        {JSON.stringify(inventory)}
       </div>
     </div>
   );
